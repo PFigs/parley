@@ -16,17 +16,24 @@ digraph mode {
   "User request" [shape=doublecircle];
   "Mentions review comments to fix?" [shape=diamond];
   "Mentions reviewing code?" [shape=diamond];
+  "Fetch PR comments" [shape=box];
+  "Has comments?" [shape=diamond];
   "RECEIVE mode" [shape=box];
   "REVIEW mode" [shape=box];
   "Ask which mode" [shape=box];
 
   "User request" -> "Mentions review comments to fix?";
-  "Mentions review comments to fix?" -> "RECEIVE mode" [label="yes"];
+  "Mentions review comments to fix?" -> "Fetch PR comments" [label="yes"];
+  "Fetch PR comments" -> "Has comments?";
+  "Has comments?" -> "RECEIVE mode" [label="yes"];
+  "Has comments?" -> "REVIEW mode" [label="no — nothing to fix, switch to reviewing"];
   "Mentions review comments to fix?" -> "Mentions reviewing code?" [label="no"];
   "Mentions reviewing code?" -> "REVIEW mode" [label="yes"];
   "Mentions reviewing code?" -> "Ask which mode" [label="unclear"];
 }
 ```
+
+When the user asks to address PR feedback but there are no review comments, there is nothing to receive. In this case, automatically switch to **Review Mode** -- inform the user that no comments were found and that you will review the PR changes instead.
 
 ## Receive Mode
 
@@ -151,6 +158,8 @@ Review a PR and submit feedback where the user controls what gets posted.
 gh pr view {number} --repo {owner}/{repo} --json title,body,url,state,headRefName,files
 gh pr diff {number} --repo {owner}/{repo}
 ```
+
+**Check for a plan:** Read the PR body for an attached implementation plan, checklist, or linked planning document. If a plan exists, use it as the review baseline -- verify that the diff implements what the plan describes and flag deviations (missing steps, extra changes, or contradictions). If no plan exists, review the diff on its own merits.
 
 For large PRs (>500 lines changed or >10 files), spawn parallel Explore agents to review different areas of the diff. For small PRs, review directly.
 
