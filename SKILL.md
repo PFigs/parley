@@ -127,7 +127,29 @@ Comments with a **skip** disposition need no action and no reply -- they are onl
 
 In **one-by-one** mode, show each fix/draft for approval before moving to the next. In **autonomous** mode, implement all fixes and draft all replies, then show a summary.
 
-After all fixes are implemented, summarize what changed and ask the user for confirmation before pushing. Do not push automatically. Code must be pushed before any replies go out -- reviewers should see the updated code when they read the reply.
+After all fixes are implemented, summarize what changed and ask the user how to push. Do not push automatically. Code must be pushed before any replies go out -- reviewers should see the updated code when they read the reply.
+
+Use **AskUserQuestion** to ask the push method:
+
+```
+question: "How should I push the changes?"
+header: "Push method"
+options:
+  - label: "git push"
+    description: "Plain git push to the remote branch"
+  - label: "gh"
+    description: "Push via GitHub CLI"
+  - label: "graphite-cli"
+    description: "Push via Graphite (gt stack submit, etc.)"
+  - label: "Push only"
+    description: "Push the code but skip replies -- I'll handle comments myself"
+  - label: "Skip everything"
+    description: "Don't push or reply -- I'll handle it all myself"
+```
+
+If the user picks **Push only**, push the code using plain `git push` (or ask which method if unclear), then stop -- skip Steps 5 and 6 entirely. The user will handle replies on their own.
+
+If the user picks **Skip everything**, stop after the summary -- skip pushing and reply submission. Warn the user that replies reference code changes that haven't been pushed yet, so they should push before replying.
 
 ### Step 5: Submit all replies
 
