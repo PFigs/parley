@@ -59,25 +59,66 @@ If the branch does not exist locally, fetch it from the remote. If the checkout 
 
 ### Step 1: Fetch and parse
 
+**Default: fetch only open (unresolved) review threads.** Resolved threads have already been handled and should not be re-addressed. Only fetch resolved threads if the user explicitly asks to revisit them (e.g., "include resolved comments", "look at already-resolved threads").
+
 ```bash
 # Get PR metadata
 gh pr view {number} --repo {owner}/{repo} --json title,body,url,state,headRefName
 
-# Get inline review comments (comments attached to specific lines of code)
-gh api repos/{owner}/{repo}/pulls/{number}/comments
+# Get the current user's login (used to detect self-authored comments)
+gh api user --jq .login
+
+# Get inline review threads with resolution status via GraphQL.
+# The query returns all threads; filter client-side to keep only isResolved == false.
+# Do NOT drop this filter unless the user explicitly asks to include resolved threads.
+gh api graphql -F owner={owner} -F repo={repo} -F number={number} -f query='
+  query($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100) {
+          nodes {
+            id
+            isResolved
+            comments(first: 50) {
+              nodes {
+                databaseId
+                author { login }
+                body
+                path
+                line
+                diffHunk
+              }
+            }
+          }
+        }
+      }
+    }
+  }'
 
 # Get top-level review bodies (summary text submitted with approve/request-changes/comment reviews)
 gh api repos/{owner}/{repo}/pulls/{number}/reviews
 ```
 
+Discard any thread where `isResolved` is `true` -- those are closed and out of scope by default. Record each remaining (open) thread's `id` alongside its comments so the thread can be resolved later if needed.
+
 ### Step 2: Present ALL comments
 
-List **every** comment, including ones that look informational, agreements, or praise. Do not silently skip any comment. Group by file. For each comment show:
+List **every** comment from unresolved threads, including ones that look informational, agreements, or praise. Do not silently skip any comment. Group by file. For each comment show:
 - File path and line
-- The diff hunk (from the comment's `diff_hunk` field)
-- The reviewer's comment
+- The diff hunk (from the comment's `diffHunk` field)
+- The author login (so the user can see at a glance which comments are self-authored)
+- The comment body
 - Whether it's part of a thread (has replies)
-- Suggested disposition: **fix** (code change needed), **reply** (acknowledge/discuss, no code change), or **skip** (no action or reply needed)
+- Suggested disposition (see below)
+
+Dispositions:
+- **fix** — code change needed; a reply will be drafted describing what changed
+- **reply** — no code change; a reply acknowledges/discusses the point
+- **skip** — no action, no reply
+- **fix-and-resolve** — code change needed; **no reply**, resolve the thread after the fix lands. This is the default for comments whose author matches the current user's login.
+- **resolve** — no code change, no reply, just resolve the thread. Use this for self-authored comments that only needed a note (no fix required).
+
+Self-authored rule: for any comment where `author.login` equals the current user's login, default the disposition to **fix-and-resolve** (if a fix is needed) or **resolve** (if not). Do not reply to yourself by default. The user may still override to **reply** if they want an explicit note in the thread.
 
 If any comment is unclear, flag it explicitly and ask the user to clarify its intent -- do not guess. Present the full list with suggested dispositions, then use **AskUserQuestion** to confirm:
 
@@ -117,13 +158,12 @@ options:
 
 ### Step 4: Implement all changes and draft all replies
 
-Process all comments with a **fix** disposition. For each:
-1. Implement the fix (adopt the `superpowers:receiving-code-review` posture: verify the suggestion is correct before implementing, never blindly agree)
-2. Draft the reply text (but do NOT submit it yet)
-
-For comments with a **reply** disposition (no code change needed), draft reply text during this step as well.
-
-Comments with a **skip** disposition need no action and no reply -- they are only included in the final summary.
+Process each comment by disposition:
+- **fix** — implement the fix (adopt the `superpowers:receiving-code-review` posture: verify the suggestion is correct before implementing, never blindly agree), then draft reply text (do NOT submit yet).
+- **fix-and-resolve** — implement the fix as above, but do NOT draft a reply. Mark the thread to be resolved in Step 5 after the code is pushed.
+- **reply** — no code change; draft reply text.
+- **resolve** — no code change, no reply; mark the thread to be resolved in Step 5.
+- **skip** — no action and no reply; included in the final summary only.
 
 In **one-by-one** mode, show each fix/draft for approval before moving to the next. In **autonomous** mode, implement all fixes and draft all replies, then show a summary.
 
@@ -151,20 +191,31 @@ If the user picks **Push only**, push the code using plain `git push` (or ask wh
 
 If the user picks **Skip everything**, stop after the summary -- skip pushing and reply submission. Warn the user that replies reference code changes that haven't been pushed yet, so they should push before replying.
 
-### Step 5: Submit all replies
+### Step 5: Submit replies and resolve threads
 
-Only after code changes are pushed (or if there are no code changes), submit replies:
+Only after code changes are pushed (or if there are no code changes), submit replies and resolve threads:
 - **fix** comments: reply describes what was changed and why
 - **reply** comments: reply acknowledges, discusses, or answers the reviewer's point (no code change)
+- **fix-and-resolve** comments: no reply is sent; resolve the thread
+- **resolve** comments: no reply is sent; resolve the thread
 
 In **autonomous** mode, show all draft replies for final approval before submitting. In **one-by-one** mode, replies were already approved individually in Step 4 -- submit them without re-asking (unless the user chose batch submission in Step 3).
 
 ```bash
+# Post a reply in an existing thread
 gh api repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies \
   -f body="reply text"
+
+# Resolve a thread (use the thread id captured in Step 1)
+gh api graphql -F threadId={threadId} -f query='
+  mutation($threadId: ID!) {
+    resolveReviewThread(input: {threadId: $threadId}) {
+      thread { isResolved }
+    }
+  }'
 ```
 
-Reply in the thread, never as a top-level PR comment. If the comment is a top-level review, reply on the review itself.
+Reply in the thread, never as a top-level PR comment. If the comment is a top-level review, reply on the review itself. Top-level review bodies do not belong to a thread and cannot be resolved -- for self-authored top-level reviews, default to **skip** unless the user wants to reply.
 
 ### Step 6: Wrap up
 
@@ -247,9 +298,11 @@ Principles:
 | Action | Command |
 |--------|---------|
 | View PR | `gh pr view {n} --repo {o}/{r} --json title,body,url,state` |
-| Read inline comments | `gh api repos/{o}/{r}/pulls/{n}/comments` |
+| Current user login | `gh api user --jq .login` |
+| Read open review threads (GraphQL, default) | see Step 1 query; filter `isResolved == false` -- only fetch resolved threads if the user explicitly asks |
 | Read reviews | `gh api repos/{o}/{r}/pulls/{n}/reviews` |
 | Reply to thread | `gh api repos/{o}/{r}/pulls/{n}/comments/{id}/replies -f body="..."` |
+| Resolve thread | `gh api graphql -F threadId={id} -f query='mutation($threadId: ID!) { resolveReviewThread(input: {threadId: $threadId}) { thread { isResolved } } }'` |
 | Submit review | `gh api repos/{o}/{r}/pulls/{n}/reviews -f event=COMMENT -f body="..." -f comments='[...]'` |
 | Top-level comment (Review mode only) | `gh pr comment {n} --repo {o}/{r} --body "..."` |
 | View diff | `gh pr diff {n} --repo {o}/{r}` |
@@ -260,10 +313,12 @@ Principles:
 |---------|-----|
 | Submitting replies without user approval | Always show draft first |
 | Replying as top-level comment | Use comment thread reply endpoint |
-| Marking threads as resolved | Never do this unless user explicitly says to |
+| Resolving threads authored by others | Only resolve threads the user explicitly asks to resolve, or self-authored threads per the default rule |
+| Replying to your own comments by default | For self-authored comments, default to **fix-and-resolve** / **resolve** -- do not reply unless the user overrides |
+| Fetching and processing resolved threads | Filter `isResolved == true` out at the GraphQL step; never address a thread that is already resolved |
 | Accusatory tone in replies | Use tone guidelines table above |
 | Starting fixes before mode selection | Present comments (Step 2), then ask autonomous vs one-by-one (Step 3), then implement (Step 4) |
-| Skipping informational/agreement comments | Present every comment; user decides disposition (fix/reply/skip) |
+| Skipping informational/agreement comments | Present every comment; user decides final disposition |
 | Guessing intent on ambiguous comments | Ask the user to clarify |
 | Submitting replies before pushing code | Push code first, then submit replies -- reviewers should see updated code with the reply |
 | Pushing code without confirmation | Ask user for confirmation before pushing; never push silently |
