@@ -294,7 +294,7 @@ For large PRs (>500 lines changed or >10 files), spawn parallel Explore agents t
 
 ### Step 2: Compile issues
 
-Present a numbered list of findings to the user:
+Build a numbered list of findings as raw notes (do NOT show this to the user yet — the quality gate in Step 2.5 may drop or reframe items):
 
 ```
 1. [file.py:42] Description of issue
@@ -302,20 +302,49 @@ Present a numbered list of findings to the user:
 3. [other.py:15] Description of issue
 ```
 
+### Step 2.5: Quality gate
+
+Before showing anything to the user, dispatch a **general-purpose sub-agent** to grade every drafted finding as **high-signal** or **nit**. Brief the agent like a critical reviewer; the goal is to filter out comments that aren't worth the author's time.
+
+**High-signal**: a real correctness, design, security, or coupling concern the author probably didn't catch — the kind of feedback the reviewer would thank you for. Includes plan/spec deviations, doc/code drift that misleads readers, broken error paths, contracts that don't match docs, and ambiguity worth confirming.
+
+**Nit**: cosmetic style preferences, redundant cleanups, naming bikeshed, anything the author can reasonably ignore without harm. When in doubt, grade as nit — better to under-post than to flood the PR.
+
+Pass the agent the diff context for each finding (file path, line, draft body) and ask for a one-line rationale per item. Spawn the sub-agent so the grading happens with a fresh perspective and doesn't get coloured by the analysis that produced the drafts.
+
+Bucket the findings into two groups based on the agent's grading. Then present them to the user with framing language that mirrors the user's own confidence:
+
+- **High-signal (recommend posting):** "I think these are worth the author's attention — should I post them?"
+- **Nit / cosmetic (default skip):** "These are lower-weight nits — call them out if you want, but I'd default to skipping. Want to include any?"
+
+Show the agent's one-line rationale alongside each finding so the user understands why it landed where it did.
+
 ### Step 3: User decides what to submit
 
-Use **AskUserQuestion** with two questions:
+Ask about each bucket separately via **AskUserQuestion**, plus the attribution marker. The high-signal bucket defaults to posting; the nit bucket defaults to skipping. If a bucket is empty, omit its question.
 
 ```
-question: "How would you like to submit these findings?"
-header: "Submit mode"
+question: "Post the high-signal findings ({list of numbers})?"
+header: "High-signal"
 options:
-  - label: "All"
-    description: "Show all draft comments for batch approval"
+  - label: "Post all"
+    description: "Submit every high-signal comment as drafted"
   - label: "Subset"
-    description: "Pick specific findings by number (e.g. 1,3,5)"
+    description: "Pick specific findings by number (e.g. 1,3)"
   - label: "One-by-one"
     description: "Review each draft individually -- approve, edit, or skip"
+  - label: "Skip all"
+    description: "Don't post any high-signal comment"
+
+question: "Include any of the nit findings ({list of numbers})?"
+header: "Nits"
+options:
+  - label: "None (default)"
+    description: "Skip all nit comments"
+  - label: "Pick which"
+    description: "I'll specify by number"
+  - label: "Post all nits"
+    description: "Submit every nit comment as drafted (rare)"
 
 question: "Add an attribution marker so the author can tell comments came from an LLM?"
 header: "Attribution"
@@ -389,6 +418,8 @@ Principles:
 | Accusatory tone in replies | Use tone guidelines table above |
 | Starting fixes before mode selection | Present comments (Step 2), then ask autonomous vs one-by-one (Step 3), then implement (Step 4) |
 | Skipping informational/agreement comments | Present every comment; user decides final disposition |
+| Flooding the PR with cosmetic nits in Review mode | Run the Step 2.5 quality gate; default-skip the nit bucket unless the user opts in |
+| Skipping the Step 2.5 quality gate when generating review comments | Always run the sub-agent grading before showing drafts -- the user's bar is high-signal only by default |
 | Guessing intent on ambiguous comments | Ask the user to clarify |
 | Submitting replies before pushing code | Push code first, then submit replies -- reviewers should see updated code with the reply |
 | Pushing code without confirmation | Ask user for confirmation before pushing; never push silently |
