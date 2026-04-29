@@ -39,23 +39,51 @@ When the user asks to address PR feedback but there are no review comments, ther
 
 Address review comments on a PR where the user (or their collaborator) is the author.
 
-### Step 0: Verify branch is checked out
+### Step 0: Choose workspace and check out branch
 
-Before doing any work, ensure the PR's branch exists locally and is checked out. Use the `headRefName` from the PR metadata to determine the correct branch.
+Before doing any work, ask the user how to set up the workspace. Use **AskUserQuestion**:
 
-```bash
-# Get the branch name from PR metadata
-gh pr view {number} --repo {owner}/{repo} --json headRefName --jq .headRefName
-
-# Check current branch
-git branch --show-current
-
-# If not on the correct branch, fetch and check it out
-git fetch origin {branch}
-git checkout {branch}
+```
+question: "How should I set up the workspace for this PR?"
+header: "Workspace"
+options:
+  - label: "Current repo"
+    description: "Work in the current git directory and check out the PR branch"
+  - label: "Worktree"
+    description: "Create a git worktree from the current repo for this branch"
+  - label: "Clone fresh"
+    description: "Clone the repo to a new location and check out the branch"
 ```
 
-If the branch does not exist locally, fetch it from the remote. If the checkout fails (e.g., due to uncommitted changes), stop and inform the user before proceeding. Never apply fixes to the wrong branch.
+Get the PR's branch name first using `headRefName` from the PR metadata:
+
+```bash
+gh pr view {number} --repo {owner}/{repo} --json headRefName --jq .headRefName
+```
+
+Then handle the chosen strategy:
+
+- **Current repo**: fetch and check out the branch in the current directory.
+  ```bash
+  git fetch origin {branch}
+  git checkout {branch}
+  ```
+- **Worktree**: create a worktree for the branch in a sibling directory, then operate from there.
+  ```bash
+  git fetch origin {branch}
+  git worktree add ../{repo}-{branch} {branch}
+  ```
+- **Clone fresh**: clone the repo under the XDG cache path at `parley/{pr-number}/{repo}` and check out the branch.
+  ```bash
+  CLONE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/parley/{number}/{repo}"
+  mkdir -p "$(dirname "$CLONE_DIR")"
+  gh repo clone {owner}/{repo} "$CLONE_DIR"
+  # then in the new directory:
+  git checkout {branch}
+  ```
+  Record the clone path so it can be offered for removal in Step 6.
+
+If the checkout, worktree creation, or clone fails (e.g., due to uncommitted changes or a path conflict), stop and inform the user before proceeding. Never apply fixes to the wrong branch or location.
 
 ### Step 1: Fetch and parse
 
@@ -220,6 +248,20 @@ Reply in the thread, never as a top-level PR comment. If the comment is a top-le
 ### Step 6: Wrap up
 
 After all comments addressed: summarize what was fixed, what was replied to, what was skipped, and what needs follow-up.
+
+If the user picked **Clone fresh** in Step 0, offer to remove the clone directory now that the work is done. Use **AskUserQuestion**:
+
+```
+question: "Remove the cloned repo at {clone_path}?"
+header: "Cleanup"
+options:
+  - label: "Remove"
+    description: "Delete the clone directory now that the work is done"
+  - label: "Keep"
+    description: "Leave the clone in place for further use"
+```
+
+Only remove the directory if the user picks **Remove**. Never delete a clone silently.
 
 ## Review Mode
 
