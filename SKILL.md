@@ -164,7 +164,7 @@ Claude may suggest **skip** but only the user can finalize that disposition -- n
 
 ### Step 3: Ask for execution mode
 
-Use **AskUserQuestion** with two questions:
+Use **AskUserQuestion** with three questions:
 
 ```
 question: "How should I work through the comments?"
@@ -182,7 +182,19 @@ options:
     description: "Submit each reply right after you approve it"
   - label: "Batch at end"
     description: "Hold all replies and submit them together after final review"
+
+question: "Add an attribution marker so reviewers can tell replies came from an LLM?"
+header: "Attribution"
+options:
+  - label: "Suffix '- claude'"
+    description: "Append ' - claude' to each reply"
+  - label: "Prefix 'from claude:'"
+    description: "Prepend 'from claude: ' to each reply"
+  - label: "None"
+    description: "Send replies with no attribution marker"
 ```
+
+The "Other" entry in the AskUserQuestion UI lets the user supply a custom marker (e.g., a different model name or an arbitrary tag). Treat any custom value as the literal marker text and apply it in the same position it implies: leading text → prefix, trailing text → suffix.
 
 ### Step 4: Implement all changes and draft all replies
 
@@ -194,6 +206,8 @@ Process each comment by disposition:
 - **skip** — no action and no reply; included in the final summary only.
 
 In **one-by-one** mode, show each fix/draft for approval before moving to the next. In **autonomous** mode, implement all fixes and draft all replies, then show a summary.
+
+Apply the attribution marker chosen in Step 3 to every draft reply before showing or submitting it. Show the marker as part of each draft so the user sees the final text they're approving.
 
 After all fixes are implemented, summarize what changed and ask the user how to push. Do not push automatically. Code must be pushed before any replies go out -- reviewers should see the updated code when they read the reply.
 
@@ -290,7 +304,7 @@ Present a numbered list of findings to the user:
 
 ### Step 3: User decides what to submit
 
-Use **AskUserQuestion**:
+Use **AskUserQuestion** with two questions:
 
 ```
 question: "How would you like to submit these findings?"
@@ -302,11 +316,25 @@ options:
     description: "Pick specific findings by number (e.g. 1,3,5)"
   - label: "One-by-one"
     description: "Review each draft individually -- approve, edit, or skip"
+
+question: "Add an attribution marker so the author can tell comments came from an LLM?"
+header: "Attribution"
+options:
+  - label: "Suffix '- claude'"
+    description: "Append ' - claude' to each comment body"
+  - label: "Prefix 'from claude:'"
+    description: "Prepend 'from claude: ' to each comment body"
+  - label: "None"
+    description: "Submit comments with no attribution marker"
 ```
+
+The "Other" entry in the AskUserQuestion UI lets the user supply a custom marker (e.g., a different model name or an arbitrary tag). Treat any custom value as the literal marker text and apply it in the same position it implies: leading text → prefix, trailing text → suffix.
 
 ### Step 4: Draft, approve, and submit
 
 For each comment to submit, show the draft text to the user first. Never submit without approval.
+
+Apply the attribution marker chosen in Step 3 to every draft comment before showing or submitting it. The marker should appear in the draft the user approves so what they see is what gets posted.
 
 ```bash
 # For inline comments, create a review with --input to send structured JSON
